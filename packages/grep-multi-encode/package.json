@@ -1,0 +1,235 @@
+{
+  "name": "grep-multi-encode",
+  "displayName": "%extension.displayName%",
+  "description": "%extension.description%",
+  "version": "0.1.0",
+  "publisher": "Mizoguchi Yuhei",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yuheimizoguchi/multi-encode-search.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Search",
+    "Other"
+  ],
+  "keywords": [
+    "search",
+    "encoding",
+    "sjis",
+    "shift-jis",
+    "euc-jp",
+    "utf-8",
+    "cursor",
+    "openvsx"
+  ],
+  "activationEvents": [
+    "onCommand:multiEncodeSearch.searchInWorkspace",
+    "onCommand:multiEncodeSearch.clearResults",
+    "onCommand:multiEncodeSearch.cancelSearch",
+    "onView:multiEncodeSearch.search",
+    "onView:multiEncodeSearch.results"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "multiEncodeSearch.searchInWorkspace",
+        "title": "%command.searchInWorkspace.title%",
+        "category": "%command.category%"
+      },
+      {
+        "command": "multiEncodeSearch.clearResults",
+        "title": "%command.clearResults.title%",
+        "category": "%command.category%"
+      },
+      {
+        "command": "multiEncodeSearch.cancelSearch",
+        "title": "%command.cancelSearch.title%",
+        "category": "%command.category%"
+      },
+      {
+        "command": "multiEncodeSearch.openSettings",
+        "title": "%command.openSettings.title%",
+        "category": "%command.category%",
+        "icon": "$(gear)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "multiEncodeSearch",
+          "title": "%viewContainer.title%",
+          "icon": "media/search.svg"
+        }
+      ]
+    },
+    "views": {
+      "multiEncodeSearch": [
+        {
+          "id": "multiEncodeSearch.search",
+          "name": "%view.search.name%",
+          "type": "webview"
+        },
+        {
+          "id": "multiEncodeSearch.results",
+          "name": "%view.results.name%"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "%configuration.title%",
+      "properties": {
+        "multiEncodeSearch.enabledEncodings": {
+          "type": "array",
+          "default": [
+            "utf8",
+            "shift_jis",
+            "euc-jp"
+          ],
+          "items": {
+            "type": "string",
+            "enum": [
+              "utf8",
+              "shift_jis",
+              "cp932",
+              "windows-31j",
+              "euc-jp",
+              "utf16be",
+              "utf16le",
+              "latin1",
+              "windows-1252",
+              "gb18030",
+              "gbk",
+              "big5",
+              "euc-kr"
+            ]
+          },
+          "description": "%configuration.enabledEncodings.description%"
+        },
+        "multiEncodeSearch.languagePresets": {
+          "type": "object",
+          "default": {
+            "japanese": true,
+            "english": true
+          },
+          "description": "%configuration.languagePresets.description%"
+        },
+        "multiEncodeSearch.excludeGlobs": {
+          "type": "array",
+          "default": [
+            "**/.git/**",
+            "**/node_modules/**",
+            "**/dist/**",
+            "**/build/**",
+            "**/coverage/**",
+            "**/.next/**"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "%configuration.excludeGlobs.description%"
+        },
+        "multiEncodeSearch.excludeExtensions": {
+          "type": "array",
+          "default": [
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".pdf",
+            ".zip",
+            ".exe",
+            ".dll"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "%configuration.excludeExtensions.description%"
+        },
+        "multiEncodeSearch.excludeFileNames": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "%configuration.excludeFileNames.description%"
+        },
+        "multiEncodeSearch.useGitIgnore": {
+          "type": "boolean",
+          "default": true,
+          "description": "%configuration.useGitIgnore.description%"
+        },
+        "multiEncodeSearch.maxInitialMatchedFiles": {
+          "type": "number",
+          "default": 200,
+          "minimum": 1,
+          "description": "%configuration.maxInitialMatchedFiles.description%"
+        },
+        "multiEncodeSearch.maxMatchesPerFile": {
+          "type": "number",
+          "default": 20,
+          "minimum": 1,
+          "description": "%configuration.maxMatchesPerFile.description%"
+        },
+        "multiEncodeSearch.maxTotalMatches": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 1,
+          "description": "%configuration.maxTotalMatches.description%"
+        },
+        "multiEncodeSearch.maxFileSizeBytes": {
+          "type": "number",
+          "default": 2097152,
+          "minimum": 1024,
+          "description": "%configuration.maxFileSizeBytes.description%"
+        },
+        "multiEncodeSearch.concurrency": {
+          "type": "number",
+          "default": 6,
+          "minimum": 1,
+          "maximum": 32,
+          "description": "%configuration.concurrency.description%"
+        },
+        "multiEncodeSearch.caseSensitive": {
+          "type": "boolean",
+          "default": false,
+          "description": "%configuration.caseSensitive.description%"
+        },
+        "multiEncodeSearch.followSymlinks": {
+          "type": "boolean",
+          "default": false,
+          "description": "%configuration.followSymlinks.description%"
+        }
+      }
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "multiEncodeSearch.openSettings",
+          "when": "view == multiEncodeSearch.search",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "publish:openvsx": "ovsx publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.8",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.5.2",
+    "@vscode/vsce": "^3.0.0",
+    "ovsx": "^0.10.5"
+  },
+  "dependencies": {
+    "iconv-lite": "^0.6.3"
+  }
+}
