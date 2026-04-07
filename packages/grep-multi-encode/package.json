@@ -3,11 +3,14 @@
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
   "version": "0.1.0",
-  "publisher": "Mizoguchi Yuhei",
+  "preview": true,
+  "icon": "media/icon.png",
+  "publisher": "Mizo",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/yuheimizoguchi/multi-encode-search.git"
+    "url": "https://github.com/Mizoguchi-Yuhei/grep-multi-encode.git"
+    
   },
   "engines": {
     "vscode": "^1.90.0"
