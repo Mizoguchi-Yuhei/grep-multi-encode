@@ -19,7 +19,8 @@ It is designed for repositories that contain both modern UTF-8 text and legacy J
 - Dedicated sidebar UI:
   - Search form and status metrics
   - Tree results grouped by file
-  - Click a match to open file and jump to line
+  - Click a match line to open the file and jump to that line
+  - **Right-click a file row** in Results to copy absolute path, copy workspace-relative path, or reveal in Explorer / Finder
 - Performance guardrails:
   - max files, max matches, max file size, and concurrency controls
 
@@ -35,15 +36,33 @@ It is designed for repositories that contain both modern UTF-8 text and legacy J
 4. (Optional) Enter temporary exclude globs as comma-separated patterns, for example:
    - `**/*.min.js, **/vendor/**`
 5. Click `Search` (or press `Enter`).
-6. Open results from the `RESULTS` tree and click a line item to jump.
+6. In the `RESULTS` tree, click a **match line** to jump to that line in the file.
+7. (Optional) **Right-click the file row** (the parent row with the file name) to copy paths or reveal in the OS file manager (see below).
 
-## Commands
+### Results tree: context menu (file row)
+
+On the file name row (parent of match lines), the context menu offers:
+
+| Action | What it does |
+|--------|----------------|
+| **Copy Absolute Path** | Copies the full file path to the clipboard |
+| **Copy Relative Path** | Copies the path relative to the **workspace folder that contains the file** (in multi-root workspaces, that folder is the root; path separators are normalized to `/`) |
+| **Reveal in File Explorer / Finder** | Opens the OS file manager at that file |
+
+If the file is not under any workspace folder, **Copy Relative Path** shows a warning and does not copy.
+
+## Commands (Command Palette)
+
+The copy / reveal actions are also available from the Command Palette (typically with a file row focused in Results).
 
 - `Grep Multi Encode: Search in Workspace`
 - `Grep Multi Encode: Cancel Search`
 - `Grep Multi Encode: Clear Results`
 - `Grep Multi Encode: Focus Search View` (opens the Grep Multi Encode sidebar)
-- `Grep Multi Encode: Copy Absolute Path` / `Copy Relative Path` (relative to the workspace folder) / `Reveal in File Explorer / Finder` (also from the Results tree context menu on a file)
+- `Grep Multi Encode: Open Settings`
+- `Grep Multi Encode: Copy Absolute Path`
+- `Grep Multi Encode: Copy Relative Path`
+- `Grep Multi Encode: Reveal in File Explorer / Finder`
 
 ## Configuration
 
