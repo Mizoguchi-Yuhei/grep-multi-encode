@@ -42,6 +42,8 @@ It is designed for repositories that contain both modern UTF-8 text and legacy J
 - `Grep Multi Encode: Search in Workspace`
 - `Grep Multi Encode: Cancel Search`
 - `Grep Multi Encode: Clear Results`
+- `Grep Multi Encode: Focus Search View` (opens the Grep Multi Encode sidebar)
+- `Grep Multi Encode: Copy Absolute Path` / `Copy Relative Path` (relative to the workspace folder) / `Reveal in File Explorer / Finder` (also from the Results tree context menu on a file)
 
 ## Configuration
 

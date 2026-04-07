@@ -146,13 +146,14 @@ class StatusNode extends vscode.TreeItem {
   }
 }
 
-class FileNode extends vscode.TreeItem {
+export class FileNode extends vscode.TreeItem {
   constructor(public readonly result: FileResultItem) {
     super(
       path.basename(result.filePath),
       vscode.TreeItemCollapsibleState.Collapsed
     );
 
+    this.resourceUri = vscode.Uri.file(result.filePath);
     this.description = `[${result.encoding}] ${result.matches.length} match${result.matches.length === 1 ? "" : "es"}`;
     this.tooltip = new vscode.MarkdownString(
       `**${escapeMarkdown(result.relativePath)}**\n\nEncoding: \`${result.encoding}\`\nMatches: \`${result.matches.length}\``

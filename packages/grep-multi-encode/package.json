@@ -2,7 +2,7 @@
   "name": "grep-multi-encode",
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "preview": true,
   "icon": "media/icon.png",
   "publisher": "Mizo",
@@ -32,6 +32,10 @@
     "onCommand:multiEncodeSearch.searchInWorkspace",
     "onCommand:multiEncodeSearch.clearResults",
     "onCommand:multiEncodeSearch.cancelSearch",
+    "onCommand:multiEncodeSearch.copyAbsolutePath",
+    "onCommand:multiEncodeSearch.copyRelativePath",
+    "onCommand:multiEncodeSearch.revealFileInOs",
+    "onCommand:multiEncodeSearch.focusSearchView",
     "onView:multiEncodeSearch.search",
     "onView:multiEncodeSearch.results"
   ],
@@ -58,6 +62,26 @@
         "title": "%command.openSettings.title%",
         "category": "%command.category%",
         "icon": "$(gear)"
+      },
+      {
+        "command": "multiEncodeSearch.copyAbsolutePath",
+        "title": "%command.copyAbsolutePath.title%",
+        "category": "%command.category%"
+      },
+      {
+        "command": "multiEncodeSearch.copyRelativePath",
+        "title": "%command.copyRelativePath.title%",
+        "category": "%command.category%"
+      },
+      {
+        "command": "multiEncodeSearch.revealFileInOs",
+        "title": "%command.revealFileInOs.title%",
+        "category": "%command.category%"
+      },
+      {
+        "command": "multiEncodeSearch.focusSearchView",
+        "title": "%command.focusSearchView.title%",
+        "category": "%command.category%"
       }
     ],
     "viewsContainers": {
@@ -214,6 +238,23 @@
           "command": "multiEncodeSearch.openSettings",
           "when": "view == multiEncodeSearch.search",
           "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "multiEncodeSearch.copyAbsolutePath",
+          "when": "view == multiEncodeSearch.results && viewItem == fileResult",
+          "group": "1_file@1"
+        },
+        {
+          "command": "multiEncodeSearch.copyRelativePath",
+          "when": "view == multiEncodeSearch.results && viewItem == fileResult",
+          "group": "1_file@2"
+        },
+        {
+          "command": "multiEncodeSearch.revealFileInOs",
+          "when": "view == multiEncodeSearch.results && viewItem == fileResult",
+          "group": "1_file@3"
         }
       ]
     }
