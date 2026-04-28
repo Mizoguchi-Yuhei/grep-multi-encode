@@ -18,6 +18,7 @@ export interface SearchStats {
   skippedBinaryFiles: number;
   skippedLargeFiles: number;
   skippedExcludedPaths: number;
+  skippedIncludeFilter: number;
   erroredFiles: number;
 }
 
@@ -29,6 +30,7 @@ export function createEmptySearchStats(): SearchStats {
     skippedBinaryFiles: 0,
     skippedLargeFiles: 0,
     skippedExcludedPaths: 0,
+    skippedIncludeFilter: 0,
     erroredFiles: 0
   };
 }

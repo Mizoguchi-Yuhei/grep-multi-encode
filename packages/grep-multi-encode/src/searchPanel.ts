@@ -1,15 +1,26 @@
 import * as vscode from "vscode";
+import type { ExtensionConfig, SearchTriggerMode } from "./config";
+import type { EncodingPresetId } from "./encodingPresets";
+import { parseCommaSeparated } from "./inputParsing";
 import { SearchStats, createEmptySearchStats } from "./searchTypes";
 
 interface SearchUiText {
   queryLabel: string;
+  includeLabel: string;
+  excludeLabel: string;
+  rootsLabel: string;
+  encodingPresetLabel: string;
   statusLabel: string;
   encodingsLabel: string;
   caseSensitiveLabel: string;
   excludeHint: string;
+  includeHint: string;
+  rootsHint: string;
+  encodingHint: string;
   queryPlaceholder: string;
   search: string;
   cancel: string;
+  clear: string;
   hintLine1: string;
   hintLine2: string;
   initialStatus: string;
@@ -21,51 +32,89 @@ type UiLanguage = "ja" | "en";
 
 export interface SearchRequestOptions {
   excludeGlobs: string[];
+  includeGlobs: string[];
+  searchRoots: string[];
   caseSensitive?: boolean;
+  encodingPreset: EncodingPresetId;
 }
 
 interface SearchPanelState {
   query: string;
+  includeInput: string;
   excludeInput: string;
+  rootsInput: string;
+  encodingPreset: EncodingPresetId;
   caseSensitive: boolean;
   isSearching: boolean;
   statusMessage: string;
   statsSummary: string;
   elapsedSummary: string;
   encodingsSummary: string;
+  searchTriggerMode: SearchTriggerMode;
+  searchDebounceMs: number;
+  liveSearchMinQueryLength: number;
 }
 
 type SearchPanelMessage =
-  | { type: "search"; query: string; excludeInput: string; caseSensitive: boolean }
-  | { type: "cancel" };
+  | {
+      type: "search";
+      query: string;
+      includeInput: string;
+      excludeInput: string;
+      rootsInput: string;
+      caseSensitive: boolean;
+      encodingPreset: EncodingPresetId;
+    }
+  | { type: "cancel" }
+  | { type: "clear" };
 
 export class SearchPanelProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private encodingsSummary = "-";
   private readonly uiText: SearchUiText;
   private readonly language: UiLanguage;
-  private state: SearchPanelState = {
-    query: "",
-    excludeInput: "",
-    caseSensitive: false,
-    isSearching: false,
-    statusMessage: "",
-    statsSummary: "",
-    elapsedSummary: "",
-    encodingsSummary: "-"
-  };
+  private readonly getWorkspaceConfig: () => ExtensionConfig;
+  private state: SearchPanelState;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly onSearch: (query: string, options: SearchRequestOptions) => Promise<void>,
     private readonly onCancel: () => void,
-    language: UiLanguage = "en"
+    private readonly onClear: () => void,
+    language: UiLanguage,
+    getWorkspaceConfig: () => ExtensionConfig
   ) {
     this.language = language;
     this.uiText = language === "ja" ? JA_UI_TEXT : EN_UI_TEXT;
-    this.state.statusMessage = this.uiText.initialStatus;
-    this.state.statsSummary = this.formatStatsSummary(createEmptySearchStats());
-    this.state.elapsedSummary = this.formatElapsedSummary(0);
+    this.getWorkspaceConfig = getWorkspaceConfig;
+    const initialConfig = getWorkspaceConfig();
+    this.state = {
+      query: "",
+      includeInput: "",
+      excludeInput: "",
+      rootsInput: "",
+      encodingPreset: "settings",
+      caseSensitive: initialConfig.caseSensitive,
+      isSearching: false,
+      statusMessage: this.uiText.initialStatus,
+      statsSummary: this.formatStatsSummary(createEmptySearchStats()),
+      elapsedSummary: this.formatElapsedSummary(0),
+      encodingsSummary: "-",
+      searchTriggerMode: initialConfig.searchTriggerMode,
+      searchDebounceMs: initialConfig.searchDebounceMs,
+      liveSearchMinQueryLength: initialConfig.liveSearchMinQueryLength
+    };
+  }
+
+  applySearchUiFromConfig(): void {
+    const config = this.getWorkspaceConfig();
+    this.state = {
+      ...this.state,
+      searchTriggerMode: config.searchTriggerMode,
+      searchDebounceMs: config.searchDebounceMs,
+      liveSearchMinQueryLength: config.liveSearchMinQueryLength
+    };
+    this.pushState();
   }
 
   setEnabledEncodings(encodings: string[]): void {
@@ -98,22 +147,32 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
     };
 
     webviewView.webview.html = this.getHtml(webviewView.webview);
+    this.applySearchUiFromConfig();
 
     webviewView.webview.onDidReceiveMessage(async (message: SearchPanelMessage) => {
       switch (message.type) {
         case "search":
           this.state = {
             ...this.state,
+            includeInput: message.includeInput,
             excludeInput: message.excludeInput,
-            caseSensitive: message.caseSensitive
+            rootsInput: message.rootsInput,
+            caseSensitive: message.caseSensitive,
+            encodingPreset: message.encodingPreset
           };
           await this.onSearch(message.query, {
-            excludeGlobs: parseExcludeInput(message.excludeInput),
-            caseSensitive: message.caseSensitive
+            excludeGlobs: parseCommaSeparated(message.excludeInput),
+            includeGlobs: parseCommaSeparated(message.includeInput),
+            searchRoots: parseCommaSeparated(message.rootsInput),
+            caseSensitive: message.caseSensitive,
+            encodingPreset: message.encodingPreset
           });
           break;
         case "cancel":
           this.onCancel();
+          break;
+        case "clear":
+          this.onClear();
           break;
         default:
           break;
@@ -125,9 +184,8 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
 
   setSearching(query: string): void {
     this.state = {
+      ...this.state,
       query,
-      excludeInput: this.state.excludeInput,
-      caseSensitive: this.state.caseSensitive,
       isSearching: true,
       statusMessage: this.uiText.searchingStatus,
       statsSummary: this.formatStatsSummary(createEmptySearchStats()),
@@ -139,9 +197,8 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
 
   setIdle(query: string, statusMessage: string, stats?: SearchStats, elapsedMs?: number): void {
     this.state = {
+      ...this.state,
       query,
-      excludeInput: this.state.excludeInput,
-      caseSensitive: this.state.caseSensitive,
       isSearching: false,
       statusMessage,
       statsSummary: stats ? this.formatStatsSummary(stats) : this.state.statsSummary,
@@ -164,11 +221,14 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
 
   clear(): void {
     this.state = {
+      ...this.state,
       query: "",
-      excludeInput: this.state.excludeInput,
-      caseSensitive: this.state.caseSensitive,
+      includeInput: "",
+      excludeInput: "",
+      rootsInput: "",
+      encodingPreset: "settings",
       isSearching: false,
-      statusMessage: this.uiText.clearedStatus,
+      statusMessage: this.uiText.initialStatus,
       statsSummary: this.formatStatsSummary(createEmptySearchStats()),
       elapsedSummary: this.formatElapsedSummary(0),
       encodingsSummary: this.encodingsSummary
@@ -184,22 +244,27 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private formatStatsSummary(stats: SearchStats): string {
-    const skippedTotal = stats.skippedExcludedPaths + stats.skippedBinaryFiles + stats.skippedLargeFiles;
+    const skippedTotal =
+      stats.skippedExcludedPaths +
+      stats.skippedBinaryFiles +
+      stats.skippedLargeFiles +
+      stats.skippedIncludeFilter;
 
     if (this.language === "ja") {
       const lines = [`ヒット ${stats.totalMatches} 件（対象 ${stats.matchedFiles} ファイル）`, `スキップ ${skippedTotal} 件`];
       if (skippedTotal > 0) {
         lines.push(
-          `  - 除外 ${stats.skippedExcludedPaths} / バイナリ ${stats.skippedBinaryFiles} / 大容量 ${stats.skippedLargeFiles}`
+          `  - 除外 ${stats.skippedExcludedPaths} / 含めない ${stats.skippedIncludeFilter} / バイナリ ${stats.skippedBinaryFiles} / 大容量 ${stats.skippedLargeFiles}`
         );
       }
+      lines.push(`走査 ${stats.scannedFiles} ファイル`);
       return lines.join("\n");
     }
 
     const lines = [`Hits: ${stats.totalMatches} in ${stats.matchedFiles} file(s)`, `Skipped: ${skippedTotal}`];
     if (skippedTotal > 0) {
       lines.push(
-        `  - Excluded ${stats.skippedExcludedPaths} / Binary ${stats.skippedBinaryFiles} / Large ${stats.skippedLargeFiles}`
+        `  - Excluded ${stats.skippedExcludedPaths} / Not included ${stats.skippedIncludeFilter} / Binary ${stats.skippedBinaryFiles} / Large ${stats.skippedLargeFiles}`
       );
     }
     lines.push(`Scanned: ${stats.scannedFiles} file(s)`);
@@ -277,9 +342,13 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
         border-radius: 6px;
       }
 
+      select.input {
+        cursor: pointer;
+      }
+
       .buttons {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: 1fr 1fr 1fr;
         gap: 8px;
       }
 
@@ -352,8 +421,23 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       <div class="label">${escapeHtml(this.uiText.queryLabel)}</div>
       <div class="section">
         <input id="query" class="input" type="text" placeholder="${escapeHtml(this.uiText.queryPlaceholder)}" />
+        <div class="label">${escapeHtml(this.uiText.includeLabel)}</div>
+        <input id="includeInput" class="input" type="text" placeholder="include: **/*.ts, **/*.tsx" />
+        <div class="subhint">${escapeHtml(this.uiText.includeHint)}</div>
+        <div class="label">${escapeHtml(this.uiText.excludeLabel)}</div>
         <input id="excludeInput" class="input" type="text" placeholder="exclude: **/*.min.js, **/vendor/**" />
         <div class="subhint">${escapeHtml(this.uiText.excludeHint)}</div>
+        <div class="label">${escapeHtml(this.uiText.rootsLabel)}</div>
+        <input id="rootsInput" class="input" type="text" placeholder="src, packages/foo" />
+        <div class="subhint">${escapeHtml(this.uiText.rootsHint)}</div>
+        <div class="label">${escapeHtml(this.uiText.encodingPresetLabel)}</div>
+        <select id="encodingPreset" class="input" title="${escapeHtml(this.uiText.encodingHint)}">
+          <option value="settings">${escapeHtml(this.language === "ja" ? "設定の順序（enabledEncodings）" : "Settings order (enabledEncodings)")}</option>
+          <option value="utf8">UTF-8 only</option>
+          <option value="ja">${escapeHtml(this.language === "ja" ? "日本語向け" : "Japanese-heavy")}</option>
+          <option value="cjk">${escapeHtml(this.language === "ja" ? "CJK 広め" : "CJK-wide")}</option>
+        </select>
+        <div class="subhint">${escapeHtml(this.uiText.encodingHint)}</div>
         <label class="toggle">
           <input id="caseSensitive" type="checkbox" />
           <span>${escapeHtml(this.uiText.caseSensitiveLabel)}</span>
@@ -361,6 +445,7 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
         <div class="buttons">
           <button id="search" class="primary">${escapeHtml(this.uiText.search)}</button>
           <button id="cancel" class="secondary">${escapeHtml(this.uiText.cancel)}</button>
+          <button id="clear" class="secondary">${escapeHtml(this.uiText.clear)}</button>
         </div>
       </div>
       <div class="label">${escapeHtml(this.uiText.statusLabel)}</div>
@@ -380,27 +465,74 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
       const uiText = ${JSON.stringify(this.uiText)};
       const vscode = acquireVsCodeApi();
       const queryInput = document.getElementById("query");
+      const includeInput = document.getElementById("includeInput");
       const excludeInput = document.getElementById("excludeInput");
+      const rootsInput = document.getElementById("rootsInput");
+      const encodingPresetSelect = document.getElementById("encodingPreset");
       const caseSensitiveInput = document.getElementById("caseSensitive");
       const searchButton = document.getElementById("search");
       const cancelButton = document.getElementById("cancel");
+      const clearButton = document.getElementById("clear");
       const status = document.getElementById("status");
       const encodingsSummary = document.getElementById("encodingsSummary");
       const statsSummary = document.getElementById("statsSummary");
       const elapsedSummary = document.getElementById("elapsedSummary");
 
+      let liveState = {
+        searchTriggerMode: "enter",
+        searchDebounceMs: 400,
+        liveSearchMinQueryLength: 1
+      };
+      let debounceTimer = null;
+
+      const readEncodingPreset = () => {
+        const value = encodingPresetSelect.value;
+        if (value === "utf8" || value === "ja" || value === "cjk") {
+          return value;
+        }
+        return "settings";
+      };
+
       const submitSearch = () => {
         vscode.postMessage({
           type: "search",
           query: queryInput.value,
+          includeInput: includeInput.value,
           excludeInput: excludeInput.value,
-          caseSensitive: caseSensitiveInput.checked
+          rootsInput: rootsInput.value,
+          caseSensitive: caseSensitiveInput.checked,
+          encodingPreset: readEncodingPreset()
         });
       };
+
+      const scheduleDebouncedSearch = () => {
+        if (liveState.searchTriggerMode !== "debounce") {
+          return;
+        }
+        if (debounceTimer) {
+          clearTimeout(debounceTimer);
+        }
+        debounceTimer = setTimeout(() => {
+          debounceTimer = null;
+          const q = queryInput.value.trim();
+          if (q.length < liveState.liveSearchMinQueryLength) {
+            return;
+          }
+          submitSearch();
+        }, liveState.searchDebounceMs);
+      };
+
+      queryInput.addEventListener("input", () => {
+        scheduleDebouncedSearch();
+      });
 
       queryInput.addEventListener("keydown", (event) => {
         if (event.key === "Enter") {
           event.preventDefault();
+          if (debounceTimer) {
+            clearTimeout(debounceTimer);
+            debounceTimer = null;
+          }
           submitSearch();
         }
 
@@ -410,15 +542,18 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
         }
       });
 
-      excludeInput.addEventListener("keydown", (event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          submitSearch();
-        }
+      [includeInput, excludeInput, rootsInput].forEach((el) => {
+        el.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            submitSearch();
+          }
+        });
       });
 
       searchButton.addEventListener("click", submitSearch);
       cancelButton.addEventListener("click", () => vscode.postMessage({ type: "cancel" }));
+      clearButton.addEventListener("click", () => vscode.postMessage({ type: "clear" }));
 
       window.addEventListener("message", (event) => {
         const message = event.data;
@@ -428,14 +563,29 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
         }
 
         const state = message.value;
+        liveState = {
+          searchTriggerMode: state.searchTriggerMode || "enter",
+          searchDebounceMs: typeof state.searchDebounceMs === "number" ? state.searchDebounceMs : 400,
+          liveSearchMinQueryLength:
+            typeof state.liveSearchMinQueryLength === "number" ? state.liveSearchMinQueryLength : 1
+        };
+
         queryInput.value = state.query || "";
+        includeInput.value = state.includeInput || "";
         excludeInput.value = state.excludeInput || "";
+        rootsInput.value = state.rootsInput || "";
+        const preset = state.encodingPreset || "settings";
+        encodingPresetSelect.value = preset === "utf8" || preset === "ja" || preset === "cjk" ? preset : "settings";
         caseSensitiveInput.checked = Boolean(state.caseSensitive);
         queryInput.disabled = state.isSearching;
+        includeInput.disabled = state.isSearching;
         excludeInput.disabled = state.isSearching;
+        rootsInput.disabled = state.isSearching;
+        encodingPresetSelect.disabled = state.isSearching;
         caseSensitiveInput.disabled = state.isSearching;
         searchButton.disabled = state.isSearching;
         cancelButton.disabled = !state.isSearching;
+        clearButton.disabled = state.isSearching;
         status.textContent = state.statusMessage;
         status.style.display = state.statusMessage ? "block" : "none";
         encodingsSummary.textContent = uiText.encodingsLabel + ": " + (state.encodingsSummary || "-");
@@ -448,13 +598,6 @@ export class SearchPanelProvider implements vscode.WebviewViewProvider {
   }
 }
 
-function parseExcludeInput(value: string): string[] {
-  return value
-    .split(",")
-    .map((segment) => segment.trim())
-    .filter((segment) => segment.length > 0);
-}
-
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -465,35 +608,51 @@ function escapeHtml(value: string): string {
 }
 
 const JA_UI_TEXT: SearchUiText = {
-  queryLabel: "検索クエリ",
-  statusLabel: "ステータス",
-  encodingsLabel: "エンコード",
+  queryLabel: "検索",
+  includeLabel: "含めるファイル（glob）",
+  excludeLabel: "除外（一時）",
+  rootsLabel: "フォルダスコープ（カンマ区切り）",
+  encodingPresetLabel: "エンコード優先プリセット",
+  statusLabel: "結果 / ステータス",
+  encodingsLabel: "試行エンコード",
   caseSensitiveLabel: "大文字小文字を区別",
-  excludeHint: "一時除外（この検索のみ）。恒久的な除外は右上の歯車から設定できます。",
+  excludeHint: "この検索のみ。恒久的な除外は設定の excludeGlobs へ。",
+  includeHint: "空なら全ファイル。設定の includeGlobs とマージされます。",
+  rootsHint: "ワークスペース相対パス。空ならルート全体。設定の searchRoots とマージ。",
+  encodingHint: "この検索のみ。設定の enabledEncodings の順序は「設定の順序」で使用されます。",
   queryPlaceholder: "検索したい文字列を入力",
   search: "Search",
   cancel: "Cancel",
+  clear: "Clear",
   hintLine1: "Enter: 検索 / Esc: キャンセル",
-  hintLine2: "",
+  hintLine2: "設定で「入力デバウンス」を有効にすると、入力に応じて自動検索します。",
   initialStatus: "",
   searchingStatus: "ワークスペースを検索中...",
-  clearedStatus: "結果をクリアしました。"
+  clearedStatus: ""
 };
 
 const EN_UI_TEXT: SearchUiText = {
-  queryLabel: "Search Query",
-  statusLabel: "Status",
-  encodingsLabel: "Encodings",
-  caseSensitiveLabel: "Case Sensitive",
-  excludeHint: "Temporary exclude for this search only. Use the top-right gear for persistent excludes.",
-  queryPlaceholder: "Enter text to search",
+  queryLabel: "Search",
+  includeLabel: "Files to include (glob)",
+  excludeLabel: "Files to exclude (temporary)",
+  rootsLabel: "Folders to include (comma-separated)",
+  encodingPresetLabel: "Encoding priority preset",
+  statusLabel: "Results / status",
+  encodingsLabel: "Encodings tried",
+  caseSensitiveLabel: "Match Case",
+  excludeHint: "Temporary for this search only. Persistent patterns: settings excludeGlobs.",
+  includeHint: "Empty = all files. Merged with settings includeGlobs.",
+  rootsHint: "Workspace-relative paths. Empty = full workspace. Merged with settings searchRoots.",
+  encodingHint: "For this search only. Use “Settings order” to honor enabledEncodings order.",
+  queryPlaceholder: "Enter search text",
   search: "Search",
   cancel: "Cancel",
+  clear: "Clear",
   hintLine1: "Enter: search / Esc: cancel",
-  hintLine2: "",
+  hintLine2: "Enable debounced search in settings to search as you type.",
   initialStatus: "",
   searchingStatus: "Searching workspace...",
-  clearedStatus: "Results cleared."
+  clearedStatus: ""
 };
 
 function getNonce(): string {

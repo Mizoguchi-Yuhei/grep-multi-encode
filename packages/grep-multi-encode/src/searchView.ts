@@ -38,9 +38,8 @@ export class SearchResultsProvider implements vscode.TreeDataProvider<TreeNode> 
   }
 
   addResult(result: FileResultItem, stats: SearchStats): void {
-    this.results = [...this.results, result].sort((left, right) =>
-      left.relativePath.localeCompare(right.relativePath)
-    );
+    const insertAt = lowerBoundByRelativePath(this.results, result.relativePath);
+    this.results.splice(insertAt, 0, result);
     this.stats = { ...stats };
     this.statusMessage = `Scanning... ${stats.scannedFiles} files, ${stats.matchedFiles} matched.`;
     this.refresh();
@@ -66,7 +65,8 @@ export class SearchResultsProvider implements vscode.TreeDataProvider<TreeNode> 
     this.lastQuery = "";
     this.results = [];
     this.isSearching = false;
-    this.statusMessage = this.language === "ja" ? "結果をクリアしました。" : "Results cleared.";
+    this.statusMessage =
+      this.language === "ja" ? "ワークスペース検索を開始してください。" : "Run a workspace search to begin.";
     this.stats = createEmptySearchStats();
     this.refresh();
   }
@@ -181,9 +181,30 @@ class MatchNode extends vscode.TreeItem {
   }
 }
 
+function lowerBoundByRelativePath(results: FileResultItem[], relativePath: string): number {
+  let low = 0;
+  let high = results.length;
+
+  while (low < high) {
+    const mid = (low + high) >> 1;
+
+    if (results[mid].relativePath.localeCompare(relativePath) < 0) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+
+  return low;
+}
+
 class MetricsNode extends vscode.TreeItem {
   constructor(stats: SearchStats, language: "ja" | "en") {
-    const skippedTotal = stats.skippedBinaryFiles + stats.skippedExcludedPaths + stats.skippedLargeFiles;
+    const skippedTotal =
+      stats.skippedBinaryFiles +
+      stats.skippedExcludedPaths +
+      stats.skippedLargeFiles +
+      stats.skippedIncludeFilter;
     super(
       language === "ja"
         ? `ヒット ${stats.totalMatches} 件（対象 ${stats.matchedFiles} ファイル）`
@@ -203,6 +224,7 @@ class MetricsNode extends vscode.TreeItem {
         `- Scanned files: \`${stats.scannedFiles}\``,
         `- Skipped total: \`${skippedTotal}\``,
         `  - Excluded: \`${stats.skippedExcludedPaths}\``,
+        `  - Include filter: \`${stats.skippedIncludeFilter}\``,
         `  - Binary: \`${stats.skippedBinaryFiles}\``,
         `  - Large: \`${stats.skippedLargeFiles}\``,
         `- Errors: \`${stats.erroredFiles}\``

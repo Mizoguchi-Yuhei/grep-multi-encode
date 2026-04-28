@@ -4,6 +4,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import iconv from "iconv-lite";
 import { ExtensionConfig, SupportedEncoding } from "./config";
+import { type CompiledRule, compileGlobRule, matchesRule, normalizeRelativePath } from "./globRules";
 import { createEmptySearchStats, FileResultItem, MatchItem, SearchStats } from "./searchTypes";
 
 interface CandidateFile {
@@ -25,18 +26,11 @@ interface SearchWorkspaceResult {
   stats: SearchStats;
 }
 
-interface CompiledRule {
-  pattern: string;
-  regex: RegExp;
-  directorySelfRegex?: RegExp;
-  negate: boolean;
-  directoryOnly: boolean;
-  basePath: string;
-}
-
 const PREVIEW_LIMIT = 200;
 const BINARY_SAMPLE_SIZE = 1024;
 const WINDOWS_PATH_MATCH = process.platform === "win32";
+
+const fileNameGlobCache = new Map<string, CompiledRule>();
 
 export async function searchWorkspace(options: SearchWorkspaceOptions): Promise<SearchWorkspaceResult> {
   const { config, outputChannel, query, token } = options;
@@ -49,25 +43,61 @@ export async function searchWorkspace(options: SearchWorkspaceOptions): Promise<
   const stats = createEmptySearchStats();
   const candidates: CandidateFile[] = [];
   const excludeRules = config.excludeGlobs.map((pattern) => compileGlobRule(pattern));
+  const includePatterns = config.includeGlobs.map((p) => p.trim()).filter((p) => p.length > 0);
+  const includeRules = includePatterns.map((pattern) => compileGlobRule(pattern));
+  const searchRootSegments = config.searchRoots
+    .map((root) => normalizeRelativePath(root).replace(/^\/+|\/+$/gu, ""))
+    .filter((segment) => segment.length > 0);
   const visitedDirectories = new Set<string>();
+
+  outputChannel.appendLine(
+    `[search] includeGlobs=${includePatterns.length ? includePatterns.join("; ") : "(none)"}`
+  );
+  outputChannel.appendLine(
+    `[search] searchRoots=${searchRootSegments.length ? searchRootSegments.join("; ") : "(workspace root)"}`
+  );
 
   for (const folder of workspaceFolders) {
     if (token.isCancellationRequested) {
       break;
     }
 
-    await collectCandidateFiles({
-      rootPath: folder.uri.fsPath,
-      currentPath: folder.uri.fsPath,
-      config,
-      outputChannel,
-      token,
-      stats,
-      candidates,
-      excludeRules,
-      inheritedIgnoreRules: [],
-      visitedDirectories
-    });
+    const startPaths =
+      searchRootSegments.length > 0
+        ? searchRootSegments.map((segment) => path.join(folder.uri.fsPath, segment))
+        : [folder.uri.fsPath];
+
+    for (const startPath of startPaths) {
+      if (token.isCancellationRequested) {
+        break;
+      }
+
+      const startStats = await safeStat(startPath);
+
+      if (!startStats) {
+        outputChannel.appendLine(`[search] searchRoot not found, skipping: ${startPath}`);
+        continue;
+      }
+
+      if (!startStats.isDirectory()) {
+        outputChannel.appendLine(`[search] searchRoot is not a directory, skipping: ${startPath}`);
+        continue;
+      }
+
+      await collectCandidateFiles({
+        rootPath: folder.uri.fsPath,
+        currentPath: startPath,
+        config,
+        outputChannel,
+        token,
+        stats,
+        candidates,
+        excludeRules,
+        includeRules,
+        inheritedIgnoreRules: [],
+        visitedDirectories
+      });
+    }
   }
 
   outputChannel.appendLine(`[search] Candidate files=${candidates.length}`);
@@ -141,6 +171,7 @@ async function collectCandidateFiles(params: {
   stats: SearchStats;
   candidates: CandidateFile[];
   excludeRules: CompiledRule[];
+  includeRules: CompiledRule[];
   inheritedIgnoreRules: CompiledRule[];
   visitedDirectories: Set<string>;
 }): Promise<void> {
@@ -153,6 +184,7 @@ async function collectCandidateFiles(params: {
     stats,
     candidates,
     excludeRules,
+    includeRules,
     inheritedIgnoreRules,
     visitedDirectories
   } = params;
@@ -248,7 +280,8 @@ async function collectCandidateFiles(params: {
             size: statsTarget.size,
             config,
             candidates,
-            stats
+            stats,
+            includeRules
           });
         }
         continue;
@@ -257,7 +290,8 @@ async function collectCandidateFiles(params: {
       await collectCandidateFiles({
         ...params,
         currentPath: absolutePath,
-        inheritedIgnoreRules: activeIgnoreRules
+        inheritedIgnoreRules: activeIgnoreRules,
+        includeRules
       });
       continue;
     }
@@ -278,7 +312,8 @@ async function collectCandidateFiles(params: {
       size: fileStats.size,
       config,
       candidates,
-      stats
+      stats,
+      includeRules
     });
   }
 }
@@ -290,12 +325,23 @@ async function pushCandidateFile(params: {
   config: ExtensionConfig;
   candidates: CandidateFile[];
   stats: SearchStats;
+  includeRules: CompiledRule[];
 }): Promise<void> {
-  const { absolutePath, relativePath, size, config, candidates, stats } = params;
+  const { absolutePath, relativePath, size, config, candidates, stats, includeRules } = params;
 
   if (size > config.maxFileSizeBytes) {
     stats.skippedLargeFiles += 1;
     return;
+  }
+
+  if (includeRules.length > 0) {
+    const normalizedPath = normalizeRelativePath(relativePath);
+    const matched = includeRules.some((rule) => matchesRule(rule, normalizedPath, false));
+
+    if (!matched) {
+      stats.skippedIncludeFilter += 1;
+      return;
+    }
   }
 
   candidates.push({
@@ -303,6 +349,50 @@ async function pushCandidateFile(params: {
     relativePath,
     size
   });
+}
+
+function detectBomEncoding(buffer: Buffer): SupportedEncoding | undefined {
+  if (buffer.length >= 3 && buffer[0] === 0xef && buffer[1] === 0xbb && buffer[2] === 0xbf) {
+    return "utf8";
+  }
+
+  if (buffer.length >= 4 && buffer[0] === 0 && buffer[1] === 0 && buffer[2] === 0xfe && buffer[3] === 0xff) {
+    return "utf16be";
+  }
+
+  if (buffer.length >= 4 && buffer[0] === 0xff && buffer[1] === 0xfe && buffer[2] === 0 && buffer[3] === 0) {
+    return "utf16le";
+  }
+
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return "utf16le";
+  }
+
+  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+    return "utf16be";
+  }
+
+  return undefined;
+}
+
+function buildEncodingTryOrder(buffer: Buffer, enabled: SupportedEncoding[]): SupportedEncoding[] {
+  const bom = detectBomEncoding(buffer);
+  const seen = new Set<SupportedEncoding>();
+  const order: SupportedEncoding[] = [];
+
+  if (bom !== undefined && enabled.includes(bom)) {
+    order.push(bom);
+    seen.add(bom);
+  }
+
+  for (const encoding of enabled) {
+    if (!seen.has(encoding)) {
+      order.push(encoding);
+      seen.add(encoding);
+    }
+  }
+
+  return order;
 }
 
 async function searchFile(
@@ -331,7 +421,9 @@ async function searchFile(
     return undefined;
   }
 
-  for (const encoding of config.enabledEncodings) {
+  const tryOrder = buildEncodingTryOrder(buffer, config.enabledEncodings);
+
+  for (const encoding of tryOrder) {
     const decodedText = decodeBuffer(buffer, encoding);
 
     if (!decodedText) {
@@ -542,7 +634,14 @@ function shouldExcludePath(params: {
 function matchesFileNameRule(fileName: string, patterns: string[]): boolean {
   return patterns.some((pattern) => {
     if (pattern.includes("*") || pattern.includes("?")) {
-      return compileGlobRule(`**/${pattern}`).regex.test(normalizeRelativePath(fileName));
+      let rule = fileNameGlobCache.get(pattern);
+
+      if (!rule) {
+        rule = compileGlobRule(`**/${pattern}`);
+        fileNameGlobCache.set(pattern, rule);
+      }
+
+      return rule.regex.test(normalizeRelativePath(fileName));
     }
 
     return candidateEquals(pattern, fileName);
@@ -559,29 +658,6 @@ function matchesIgnoreRules(rules: CompiledRule[], normalizedPath: string, isDir
   }
 
   return ignored;
-}
-
-function matchesRule(rule: CompiledRule, normalizedPath: string, isDirectory: boolean): boolean {
-  if (rule.directoryOnly && !isDirectory) {
-    return false;
-  }
-
-  const activeRegex = isDirectory && rule.directorySelfRegex ? rule.directorySelfRegex : rule.regex;
-
-  if (rule.basePath) {
-    if (normalizedPath === rule.basePath) {
-      return activeRegex.test("");
-    }
-
-    if (!normalizedPath.startsWith(`${rule.basePath}/`)) {
-      return false;
-    }
-
-    const scopedPath = normalizedPath.slice(rule.basePath.length + 1);
-    return activeRegex.test(scopedPath);
-  }
-
-  return activeRegex.test(normalizedPath);
 }
 
 function parseGitIgnore(content: string, basePath: string): CompiledRule[] {
@@ -625,74 +701,6 @@ function compileGitIgnoreRule(rawPattern: string, basePath: string): CompiledRul
     negate,
     directoryOnly
   };
-}
-
-function compileGlobRule(pattern: string, basePath = ""): CompiledRule {
-  const normalizedPattern = normalizeRelativePath(pattern);
-  const flags = WINDOWS_PATH_MATCH ? "i" : "";
-  const directoryPattern = normalizedPattern.endsWith("/**")
-    ? normalizedPattern.slice(0, -3)
-    : undefined;
-
-  return {
-    pattern: normalizedPattern,
-    regex: new RegExp(globToRegexSource(normalizedPattern), flags),
-    directorySelfRegex: directoryPattern
-      ? new RegExp(globToRegexSource(directoryPattern), flags)
-      : undefined,
-    negate: false,
-    directoryOnly: normalizedPattern.endsWith("/"),
-    basePath
-  };
-}
-
-function globToRegexSource(pattern: string): string {
-  let source = "^";
-  let index = 0;
-
-  while (index < pattern.length) {
-    const current = pattern[index];
-    const next = pattern[index + 1];
-    const afterNext = pattern[index + 2];
-
-    if (current === "*" && next === "*") {
-      // `**/` should also match paths at workspace root (zero directory depth).
-      if (afterNext === "/") {
-        source += "(?:.*/)?";
-        index += 3;
-        continue;
-      }
-      source += ".*";
-      index += 2;
-      continue;
-    }
-
-    if (current === "*") {
-      source += "[^/]*";
-      index += 1;
-      continue;
-    }
-
-    if (current === "?") {
-      source += "[^/]";
-      index += 1;
-      continue;
-    }
-
-    source += escapeRegex(current);
-    index += 1;
-  }
-
-  source += "$";
-  return source;
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[|\\{}()[\]^$+*?.]/gu, "\\$&");
-}
-
-function normalizeRelativePath(value: string): string {
-  return value.replace(/\\/gu, "/").replace(/^\.\/+/u, "").replace(/\/+/gu, "/");
 }
 
 function candidateEquals(left: string, right: string): boolean {

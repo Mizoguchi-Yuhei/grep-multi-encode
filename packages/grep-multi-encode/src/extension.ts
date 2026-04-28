@@ -1,15 +1,53 @@
 import * as path from "path";
 import * as vscode from "vscode";
 import { getExtensionConfig } from "./config";
-import { searchWorkspace } from "./searchEngine";
+import { normalizeEncodingPresetId, resolveEncodingPreset } from "./encodingPresets";
+import { createLocalSearchBackend } from "./searchBackend";
 import { SearchPanelProvider, SearchRequestOptions } from "./searchPanel";
 import { FileNode, SearchResultsProvider } from "./searchView";
+
+function mergeUniqueStrings(base: string[], extra: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const item of base) {
+    const trimmed = item.trim();
+
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+
+  for (const item of extra) {
+    const trimmed = item.trim();
+
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+
+  return out;
+}
 
 export function activate(context: vscode.ExtensionContext): void {
   const outputChannel = vscode.window.createOutputChannel("Grep Multi Encode");
   const isJapanese = vscode.env.language.toLocaleLowerCase().startsWith("ja");
   const resultsProvider = new SearchResultsProvider(isJapanese ? "ja" : "en");
+  const searchBackend = createLocalSearchBackend();
   let currentSearchCancellation: vscode.CancellationTokenSource | undefined;
+
+  let searchPanelProvider: SearchPanelProvider;
+
+  const clearResults = (): void => {
+    resultsProvider.clear();
+    searchPanelProvider.clear();
+  };
 
   const cancelSearch = (): void => {
     currentSearchCancellation?.cancel();
@@ -18,11 +56,6 @@ export function activate(context: vscode.ExtensionContext): void {
       resultsProvider.lastQueryText,
       isJapanese ? "検索をキャンセルしました。" : "Search canceled."
     );
-  };
-
-  const clearResults = (): void => {
-    resultsProvider.clear();
-    searchPanelProvider.clear();
   };
 
   const runSearch = async (rawQuery: string, options?: SearchRequestOptions): Promise<void> => {
@@ -37,18 +70,25 @@ export function activate(context: vscode.ExtensionContext): void {
     currentSearchCancellation = new vscode.CancellationTokenSource();
 
     const config = getExtensionConfig();
-    const runtimeExclude = options?.excludeGlobs ?? [];
+    const preset = normalizeEncodingPresetId(options?.encodingPreset ?? "settings");
     const mergedConfig = {
       ...config,
-      excludeGlobs: [...config.excludeGlobs, ...runtimeExclude],
-      caseSensitive: options?.caseSensitive ?? config.caseSensitive
+      excludeGlobs: mergeUniqueStrings(config.excludeGlobs, options?.excludeGlobs ?? []),
+      includeGlobs: mergeUniqueStrings(config.includeGlobs, options?.includeGlobs ?? []),
+      searchRoots: mergeUniqueStrings(config.searchRoots, options?.searchRoots ?? []),
+      caseSensitive: options?.caseSensitive ?? config.caseSensitive,
+      enabledEncodings: resolveEncodingPreset(preset, config.enabledEncodings)
     };
+
     searchPanelProvider.setEnabledEncodings(mergedConfig.enabledEncodings);
     searchPanelProvider.setCaseSensitive(mergedConfig.caseSensitive);
     const startedAt = Date.now();
     outputChannel.appendLine(`[search] Query="${query}"`);
     outputChannel.appendLine(`[search] Encodings=${mergedConfig.enabledEncodings.join(", ")}`);
     outputChannel.appendLine(`[search] Exclude globs=${mergedConfig.excludeGlobs.join(", ")}`);
+    outputChannel.appendLine(`[search] Include globs=${mergedConfig.includeGlobs.join(", ") || "(none)"}`);
+    outputChannel.appendLine(`[search] Search roots=${mergedConfig.searchRoots.join(", ") || "(workspace root)"}`);
+    outputChannel.appendLine(`[search] Encoding preset=${preset}`);
     outputChannel.appendLine(`[search] Platform=${process.platform}`);
 
     resultsProvider.startSearch(query);
@@ -71,7 +111,7 @@ export function activate(context: vscode.ExtensionContext): void {
             currentSearchCancellation?.cancel();
           });
 
-          const result = await searchWorkspace({
+          const result = await searchBackend.searchWorkspace({
             query,
             config: mergedConfig,
             outputChannel,
@@ -103,12 +143,7 @@ export function activate(context: vscode.ExtensionContext): void {
           }
 
           resultsProvider.finishSearch(query, result.results, result.stats);
-          searchPanelProvider.setIdle(
-            query,
-            "",
-            result.stats,
-            Date.now() - startedAt
-          );
+          searchPanelProvider.setIdle(query, "", result.stats, Date.now() - startedAt);
           progress.report({
             message: `${result.stats.scannedFiles} scanned, ${result.stats.matchedFiles} matched`
           });
@@ -127,14 +162,24 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   };
 
-  const searchPanelProvider = new SearchPanelProvider(
+  searchPanelProvider = new SearchPanelProvider(
     context.extensionUri,
     runSearch,
     cancelSearch,
-    isJapanese ? "ja" : "en"
+    clearResults,
+    isJapanese ? "ja" : "en",
+    getExtensionConfig
   );
   searchPanelProvider.setEnabledEncodings(getExtensionConfig().enabledEncodings);
   searchPanelProvider.setCaseSensitive(getExtensionConfig().caseSensitive);
+
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("multiEncodeSearch")) {
+        searchPanelProvider.applySearchUiFromConfig();
+      }
+    })
+  );
 
   context.subscriptions.push(outputChannel);
   context.subscriptions.push(
@@ -157,7 +202,12 @@ export function activate(context: vscode.ExtensionContext): void {
         return;
       }
 
-      await runSearch(query);
+      await runSearch(query, {
+        excludeGlobs: [],
+        includeGlobs: [],
+        searchRoots: [],
+        encodingPreset: "settings"
+      });
     })
   );
 
