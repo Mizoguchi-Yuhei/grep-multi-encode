@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0
+## 0.1.2
 
 - **検索スコープ**: 設定と検索ビューで `includeGlobs`（含めるファイルの glob）と `searchRoots`（ワークスペース相対のフォルダ）を指定でき、一時入力は設定値とマージされる
 - **リアルタイム検索**: `searchTriggerMode`（`enter` / `debounce`）、`searchDebounceMs`、`liveSearchMinQueryLength` を追加し、入力デバウンスでの自動検索に対応
