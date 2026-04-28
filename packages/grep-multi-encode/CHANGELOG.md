@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0
+
+- **検索スコープ**: 設定と検索ビューで `includeGlobs`（含めるファイルの glob）と `searchRoots`（ワークスペース相対のフォルダ）を指定でき、一時入力は設定値とマージされる
+- **リアルタイム検索**: `searchTriggerMode`（`enter` / `debounce`）、`searchDebounceMs`、`liveSearchMinQueryLength` を追加し、入力デバウンスでの自動検索に対応
+- **エンコード**: 設定の `enabledEncodings` の順序を優先度として明記。検索ビューからプリセット（設定順・UTF-8 のみ・日本語寄り・CJK 広め）を選べる
+- **結果・入力のクリア**: Clear で検索語・include / exclude / フォルダ・プリセット・結果ツリー・メトリクスをまとめて初期化
+- **性能**: BOM に基づくデコード順の短絡、ファイル名 glob のキャッシュ、結果ツリーへの二分挿入などで負荷を軽減
+- **内部**: グロブマッチを `globRules` に分離、`SearchBackend` 抽象を導入（将来のバックエンド差し替え用）
+- **開発**: Vitest とユニットテスト（パース・プリセット・include glob など）を追加
+
 ## 0.1.1
 
 - マーケットプレイス表示用アイコンを改善（縦横比を維持したレターボックス）
